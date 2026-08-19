@@ -1,0 +1,29 @@
+# 版本控制 / CI
+.git
+.github
+.husky
+.gitignore
+.lintstagedrc
+.prettierrc
+
+# 依赖与构建产物（构建阶段重新生成）
+node_modules
+**/node_modules
+frontend/out
+frontend/.next
+data
+.wrangler
+.uploads
+
+# 本地密钥与编辑器配置
+.env.production.local
+.claude
+.trae
+.codebuddy
+
+# 文档与测试（运行时不需要）
+*.md
+LICENSE
+test
+dav_gateway.py
+public/website-screenshot.png

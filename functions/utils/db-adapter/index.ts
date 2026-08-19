@@ -1,0 +1,90 @@
+import { FileMetadata } from "@shared/types";
+import { isDev } from "../common";
+import { R2Adapter } from "./r2-adapter";
+import { TGAdapter } from "./tg-adapter";
+import { CF } from "types";
+
+// 存储适配器接口定义
+export interface DBAdapter {
+  // 上传单个完整文件；waitUntil 可选，传入后 AI 分析将在后台异步执行
+  uploadFile(
+    file: File | Blob | Uint8Array,
+    metadata: FileMetadata,
+    waitUntil?: (p: Promise<any>) => void
+  ): Promise<{ key: string }>;
+  uploadStream(
+    stream: ReadableStream,
+    metadata: FileMetadata,
+    waitUntil?: (p: Promise<any>) => void,
+    mimeType?: string
+  ): Promise<{ key: string }>;
+  // 上传分片文件
+  uploadChunk(
+    key: string,
+    chunkIndex: number,
+    chunkFile: File | Blob,
+    waitUntil?: (promise: Promise<any>) => void
+  ): Promise<{ chunkIndex: number }>;
+
+  // 获取文件，永远返回Response
+  get(key: string, req?: Request): Promise<Response>;
+
+  // 删除文件
+  // TODO: 是否要在key不存在时直接返回
+  delete(key: string): Promise<{ isDeleted: boolean }>;
+
+  // 获取文件元数据（用于权限检查）
+  getFileMetadataWithValue(key: string): Promise<{
+    metadata: FileMetadata;
+    value: string | null;
+  } | null>;
+
+  // 将文件移入回收站
+  moveToTrash(key: string): Promise<void>;
+
+  // 从回收站还原文件
+  restoreFromTrash(trashKey: string): Promise<void>;
+}
+
+export enum DBAdapterType {
+  R2 = "r2",
+  TG = "telegram",
+}
+
+// 存储适配器工厂类
+export class DBAdapterFactory {
+  private static adapterInstances: Map<string, DBAdapter> = new Map();
+  static getAdapter(env: any, adapterType?: string): DBAdapter {
+    const type =
+      adapterType || (isDev(env) ? DBAdapterType.R2 : DBAdapterType.TG);
+
+    // 缓存 key 附加 KV 后端标识：适配器实例会持有 env 引用，
+    // 远程 KV（自托管）与 Cloudflare KV 的 oh_file_url 实例不同，必须分开缓存，
+    // 否则首次构造后跨请求复用旧 env，导致远程 KV 切换失效
+    // （用实例标记属性判断，避免 esbuild 压缩类名导致 constructor.name 失效）
+    const kvKind = env?.[CF.KV_NAME]?.__isRemoteKV ? "remote" : "cf";
+    const cacheKey = `${type}:${kvKind}`;
+
+    // 检查缓存中是否已有实例
+    if (this.adapterInstances.has(cacheKey)) {
+      // console.log(`DBAdapter hit: ${cacheKey}`);
+      return this.adapterInstances.get(cacheKey)!;
+    }
+
+    // 创建新实例
+    let adapter: DBAdapter;
+    switch (type.toLowerCase()) {
+      case DBAdapterType.R2:
+        adapter = new R2Adapter(env, CF.R2_BUCKET, CF.KV_NAME);
+        break;
+      case DBAdapterType.TG:
+        adapter = new TGAdapter(env, CF.KV_NAME);
+        break;
+      default:
+        throw new Error(`Unsupported storage adapter type: ${type}`);
+    }
+    this.adapterInstances.set(cacheKey, adapter);
+
+    return adapter;
+  }
+}

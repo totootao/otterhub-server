@@ -1,0 +1,170 @@
+import {
+  MoreVertical,
+  Download,
+  Trash2,
+  Heart,
+  Eye,
+  Edit,
+  Info,
+  Link,
+  Share2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+interface FileActionsProps {
+  onDownload: () => void;
+  onDelete: () => void;
+  onView: () => void;
+  onEdit: () => void;
+  onToggleLike: () => void;
+  onCopyLink: () => void;
+  onShowDetail: () => void;
+  onShare: () => void;
+  isLiked: boolean;
+}
+
+export function FileActions({
+  onDownload,
+  onDelete,
+  onView,
+  onEdit,
+  onToggleLike,
+  onCopyLink,
+  onShowDetail,
+  onShare,
+  isLiked,
+}: FileActionsProps) {
+  const IconColor = "text-foreground/80";
+  return (
+    <div className="flex items-center gap-1">
+      {/* 收藏按钮 */}
+      <Button
+        variant="ghost"
+        size="icon"
+        title="收藏"
+        className="h-10 w-10 text-foreground/80 hover:text-foreground bg-secondary/50 hover:bg-secondary/80 backdrop-blur-sm opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity rounded-xl"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleLike();
+        }}
+      >
+        <Heart
+          className={`h-4.5 w-4.5 transition-colors ${
+            isLiked
+              ? "text-pink-400 fill-pink-400"
+              : "text-foreground/80 hover:text-pink-300"
+          }`}
+        />
+      </Button>
+
+      {/* 下拉菜单 */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            title="更多操作"
+            className="h-10 w-10 text-foreground hover:text-foreground bg-secondary/50 hover:bg-secondary/80 backdrop-blur-sm opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity rounded-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreVertical className="h-4.5 w-4.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="bg-popover border-glass-border"
+        >
+          {/* 查看 */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onView();
+            }}
+            className="text-foreground hover:bg-secondary/50"
+          >
+            <Eye className={`h-4 w-4 mr-2 ${IconColor}`} />
+            查看
+          </DropdownMenuItem>
+
+          {/* 分享 */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onShare();
+            }}
+            className="text-foreground hover:bg-secondary/50"
+          >
+            <Share2 className={`h-4 w-4 mr-2 ${IconColor}`} />
+            分享
+          </DropdownMenuItem>
+
+          {/* 复制链接 */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onCopyLink();
+            }}
+            className="text-foreground hover:bg-secondary/50"
+          >
+            <Link className={`h-4 w-4 mr-2 ${IconColor}`} />
+            复制链接
+          </DropdownMenuItem>
+
+          {/* 编辑 */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+            className="text-foreground hover:bg-secondary/50"
+          >
+            <Edit className={`h-4 w-4 mr-2 ${IconColor}`} />
+            编辑
+          </DropdownMenuItem>
+
+          {/* 下载 */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onDownload();
+            }}
+            className="text-foreground hover:bg-secondary/50"
+          >
+            <Download className={`h-4 w-4 mr-2 ${IconColor}`} />
+            下载
+          </DropdownMenuItem>
+
+          {/* 详情 */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onShowDetail();
+            }}
+            className="text-foreground hover:bg-secondary/50"
+          >
+            <Info className={`h-4 w-4 mr-2 ${IconColor}`} />
+            详情
+          </DropdownMenuItem>
+
+          {/* 删除 */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="text-red-400 hover:bg-red-500/10"
+          >
+            <Trash2 className={`h-4 w-4 mr-2 ${IconColor}`} />
+            删除
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}

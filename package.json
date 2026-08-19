@@ -1,0 +1,36 @@
+{
+  "name": "otterhub-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "shared",
+    "functions"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" ",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "npx wrangler pages dev frontend/out --kv \"oh_file_url\" --r2 \"oh_file_r2\" --binding PASSWORD=123456 --binding API_TOKEN=123456 --ip 0.0.0.0 --port 8788 --persist-to ./data",
+    "build": "npm run build --prefix frontend",
+    "lint": "npm run lint --prefix frontend",
+    "typecheck": "npm run typecheck --prefix frontend",
+    "ci-test": "concurrently -k -s first \"npm run dev:backend\" \"wait-on http://localhost:8788 && mocha --exit\"",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "mocha": "^10.6.0",
+    "prettier": "^3.8.3",
+    "wait-on": "^7.2.0",
+    "wrangler": "^4.24.0"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "^0.7.6",
+    "@zip.js/zip.js": "^2.8.26",
+    "hono": "^4.11.7",
+    "jose": "^6.1.3",
+    "zod": "^4.3.6"
+  }
+}

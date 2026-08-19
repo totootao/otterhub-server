@@ -1,0 +1,20 @@
+import { Label } from "@/components/ui/label";
+import { WallpaperProvider, BingConfig, WP_API_KEY_PLACEHOLDER } from "../types";
+import { WallpaperSourceId } from "@shared/index";
+
+export const BingSource: WallpaperProvider<BingConfig> = {
+  id: WallpaperSourceId.Bing,
+  name: "Bing",
+  requiresApiKey: false,
+  defaultConfig: {},
+  getApiKey: () => WP_API_KEY_PLACEHOLDER, // Bing 不需要 API Key
+  setApiKey: (config) => config,
+
+  ConfigPanel: () => (
+    <div className="flex items-center justify-center h-20 border-2 border-dashed rounded-lg bg-background/50">
+      <div className="text-center">
+        <Label className="text-xs opacity-50">Bing & Peapix，每日刷新，无需额外配置</Label>
+      </div>
+    </div>
+  ),
+};

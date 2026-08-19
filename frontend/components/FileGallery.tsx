@@ -1,0 +1,143 @@
+"use client";
+
+import { useActiveBucket, useFilteredFiles, useFileDataStore, useFileQueryStore } from "@/stores/file";
+import { useFileUIStore } from "@/stores/file";
+import { FileCard } from "@/components/file-card";
+import { ViewModeToggle } from "@/components/ViewModeToggle";
+import { SortTypeDropdown } from "@/components/SortTypeDropdown";
+import { FilterDropdown } from "@/components/FilterDropdown";
+import { Pagination } from "@/components/Pagination";
+import { ViewMode } from "@/lib/types";
+import { ChevronDown, Loader2, CircleAlert, Ellipsis } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { MasonryGrid } from "./masonry/MasonryGrid";
+import { PhotoProvider } from "react-photo-view";
+import { PhotoToolbar } from "./FileImagePreview";
+import { useEffect } from "react";
+
+function FileViewRenderer({
+  viewMode,
+  files,
+}: {
+  viewMode: ViewMode;
+  files: any[];
+}) {
+  if (viewMode === ViewMode.Grid) {
+    return (
+      // 100%缩放时每行5个文件
+      <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
+        {files.map((file) => (
+          <FileCard key={file.name} file={file} />
+        ))}
+      </div>
+    );
+  }
+
+  if (viewMode === ViewMode.Masonry) {
+    return (
+      <div className="w-full min-w-0">
+        <MasonryGrid files={files} />
+      </div>
+    );
+  }
+
+  // 列表模式
+  return (
+    <div className="space-y-2">
+      {files.map((file) => (
+        <FileCard key={file.name} file={file} listView />
+      ))}
+    </div>
+  );
+}
+
+export function FileGallery() {
+  const { viewMode, itemsPerPage, setItemsPerPage, currentPage, setCurrentPage } = useFileUIStore();
+  const { fetchNextPage } = useFileDataStore();
+  const { searchQuery, filterLiked, filterTags, filterDateRange } = useFileQueryStore();
+  const files = useFilteredFiles();
+  const bucket = useActiveBucket();
+
+  // 当筛选条件变化时，重置页码到第一页
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [searchQuery, filterLiked, filterTags, filterDateRange, setCurrentPage]);
+
+  const handlePageChange = (selectedItem: { selected: number }) => {
+    setCurrentPage(selectedItem.selected);
+  };
+
+  const handleItemsPerPageChange = (size: number) => {
+    setItemsPerPage(size);
+  };
+
+  const offset = currentPage * itemsPerPage;
+  const currentFiles =
+    viewMode === ViewMode.Masonry
+      ? files
+      : files.slice(offset, offset + itemsPerPage);
+
+  return (
+    <PhotoProvider
+      maskOpacity={0.85}
+      toolbarRender={(props) => <PhotoToolbar {...props} />}
+    >
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-2 text-sm text-foreground/50">
+          <span>{files.length} 个文件</span>
+          {bucket.hasMore && (
+            <Button
+              onClick={fetchNextPage}
+              disabled={bucket.loading || bucket.error}
+              variant="ghost"
+              size="sm"
+              title={bucket.loading ? "加载中" : bucket.error ? "加载失败" : "加载更多"}
+              className="h-8 w-8 p-0 border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {bucket.loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : bucket.error ? (
+                <CircleAlert className="h-4 w-4" />
+              ) : (
+                <Ellipsis className="h-4 w-4" />
+              )}
+            </Button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <FilterDropdown />
+          <SortTypeDropdown />
+          <ViewModeToggle />
+        </div>
+      </div>
+
+      <FileViewRenderer viewMode={viewMode} files={currentFiles} />
+
+      {viewMode !== ViewMode.Masonry && (
+        <Pagination
+          totalItems={files.length}
+          itemsPerPage={itemsPerPage}
+          currentPage={currentPage}
+          hasMore={bucket.hasMore}
+          loading={bucket.loading}
+          error={bucket.error}
+          onPageChange={handlePageChange}
+          onLoadMore={fetchNextPage}
+          onItemsPerPageChange={handleItemsPerPageChange}
+        />
+      )}
+
+      {viewMode === ViewMode.Masonry && bucket.hasMore && (
+        <div className="flex justify-center py-8">
+          <button
+            onClick={fetchNextPage}
+            disabled={bucket.loading}
+            className="px-6 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronDown className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+    </PhotoProvider>
+  );
+}

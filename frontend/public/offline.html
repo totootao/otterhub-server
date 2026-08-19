@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#00cd99" />
+    <title>OtterHub 离线中</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Segoe UI", "PingFang SC", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at top, rgba(0, 205, 153, 0.18), transparent 38%),
+          linear-gradient(180deg, #08141f 0%, #102130 100%);
+        color: #effcf7;
+      }
+
+      main {
+        width: min(92vw, 28rem);
+        padding: 2rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 1.5rem;
+        background: rgba(7, 19, 30, 0.78);
+        backdrop-filter: blur(16px);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
+      }
+
+      .badge {
+        display: inline-flex;
+        padding: 0.5rem 0.75rem;
+        border-radius: 999px;
+        background: rgba(0, 205, 153, 0.14);
+        color: #7cf1ca;
+        font-size: 0.875rem;
+      }
+
+      h1 {
+        margin: 1rem 0 0.75rem;
+        font-size: clamp(1.8rem, 6vw, 2.3rem);
+      }
+
+      p {
+        margin: 0;
+        color: rgba(239, 252, 247, 0.72);
+        line-height: 1.7;
+      }
+
+      a {
+        display: inline-flex;
+        margin-top: 1.5rem;
+        padding: 0.8rem 1rem;
+        border-radius: 0.9rem;
+        background: #00cd99;
+        color: #062218;
+        text-decoration: none;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="badge">OtterHub · Offline</div>
+      <h1>网络暂时不可用</h1>
+      <p>当前仅保留已缓存的应用壳。文件列表、上传、预览和下载恢复网络后才能继续使用。</p>
+      <a href="/">返回首页</a>
+    </main>
+  </body>
+</html>
