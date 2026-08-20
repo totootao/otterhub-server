@@ -22,6 +22,7 @@ import {
   getContentTypeByExt,
 } from "@utils/file";
 import { TEMP_CHUNK_TTL } from "types";
+import { getCachedList, setCachedList } from "@utils/list-cache";
 import type { Env } from "../types/hono";
 
 // ==========================================
@@ -227,16 +228,36 @@ export function dirMarkerKey(type: FileType, dirPath: string): string {
   return `${type}:dir:${dirPath}`;
 }
 
-/** 类型下全部条目（文件 + 目录标记），自动翻页 */
+/** 类型下全部条目（文件 + 目录标记），自动翻页
+ *  性能路径：远程 KV 时优先走 listAll 单请求聚合 + 短 TTL 缓存
+ *  （写入时由 RemoteKV.put/delete 按前缀自动失效），把目录浏览的
+ *  N 次分页往返压缩为 1 次，重复浏览直接命中缓存。
+ */
 export async function listAllOfType(
   kv: any,
   type: FileType
 ): Promise<FileItem[]> {
+  const prefix = `${type}:`;
+
+  // 远程 KV：单请求聚合 + TTL 缓存
+  if (typeof kv.listAll === "function") {
+    const cached = getCachedList(prefix);
+    if (cached) return cached;
+    const { keys } = await kv.listAll(prefix);
+    const out: FileItem[] = keys.map((k: any) => ({
+      name: k.name,
+      metadata: k.metadata,
+    }));
+    setCachedList(prefix, out);
+    return out;
+  }
+
+  // Cloudflare KV 绑定：逐页翻取（不缓存，保持配额语义）
   const out: FileItem[] = [];
   let cursor: string | undefined;
   let guard = 0;
   do {
-    const res = await kv.list({ prefix: `${type}:`, limit: 1000, cursor });
+    const res = await kv.list({ prefix, limit: 1000, cursor });
     for (const k of res.keys ?? []) {
       out.push({ name: k.name, metadata: k.metadata });
     }

@@ -5,12 +5,15 @@
 //       通过 HTTP 调用自建 KV 服务（SQLite 后端，接口兼容 Cloudflare KVNamespace）。
 // 服务端接口约定（见自建 kv_server.py）：
 //   GET    /kv?prefix=&limit=&cursor=   → { keys:[{name,metadata,expiration}], list_complete, cursor }
+//   GET    /kv/list-all?prefix=&limit=  → { keys:[{name,metadata}], truncated }（服务端聚合，单请求返回全部）
 //   GET    /kv/<key>?metadata=true      → { value, metadata }（404 表示不存在）
 //   PUT    /kv/<key>                    body=值  头 X-KV-Metadata / X-KV-ExpirationTtl
 //   DELETE /kv/<key>                    → 204（幂等）
 //   GET    /kv/<key>/metadata           → { metadata }
 // 二进制兼容：自建服务以 UTF-8 TEXT 存储，无法直接存任意二进制（分片暂存流）。
 //           这里对二进制值统一 base64 编码并加前缀标记，读取时还原，服务端无需改动。
+
+import { invalidateListCache } from "./list-cache";
 
 const B64_PREFIX = "otterhub-b64:";
 
@@ -170,6 +173,8 @@ export class RemoteKV {
         `[RemoteKV] put(${key}) failed: HTTP ${res.status} ${errText.slice(0, 200)}`
       );
     }
+    // 写失效：保证 listAllOfType 缓存中该 key 所属前缀的列表立即过期
+    invalidateListCache(key);
   }
 
   async delete(key: string): Promise<void> {
@@ -180,6 +185,53 @@ export class RemoteKV {
     if (!res.ok) {
       throw new Error(`[RemoteKV] delete(${key}) failed: HTTP ${res.status}`);
     }
+    invalidateListCache(key);
+  }
+
+  /**
+   * 一次性拉取前缀下全部 key（服务端聚合分页，单请求返回）。
+   * 自建服务 /kv/list-all 专用；旧版服务端（404/405）自动回退为逐页 list。
+   * 目录浏览/批量操作的全量扫描走这里，把 N 次往返压缩为 1 次。
+   */
+  async listAll(
+    prefix?: string,
+    limit = 50000
+  ): Promise<{ keys: any[]; truncated: boolean }> {
+    const params = new URLSearchParams();
+    if (prefix) params.set("prefix", prefix);
+    params.set("limit", String(limit));
+    const res = await fetch(this.url(`/kv/list-all?${params.toString()}`), {
+      headers: this.authHeaders(),
+    });
+    if (res.status === 404 || res.status === 405) {
+      // 旧版服务端：回退逐页拉全
+      const keys: any[] = [];
+      let cursor: string | undefined;
+      let guard = 0;
+      do {
+        const page = await this.list({ prefix, limit: 1000, cursor });
+        keys.push(...(page.keys ?? []));
+        cursor = page.list_complete ? undefined : page.cursor;
+        guard += 1;
+      } while (cursor && guard < 200);
+      return { keys, truncated: !!cursor };
+    }
+    if (!res.ok) {
+      throw new Error(
+        `[RemoteKV] listAll(${prefix ?? ""}) failed: HTTP ${res.status}`
+      );
+    }
+    const data = (await res.json()) as {
+      keys: { name: string; metadata?: any }[];
+      truncated?: boolean;
+    };
+    return {
+      keys: (data.keys ?? []).map((k) => ({
+        ...k,
+        metadata: decodeMetadata(k.metadata),
+      })),
+      truncated: !!data.truncated,
+    };
   }
 
   /** 前缀列举（自动跟随游标翻页由调用方控制，这里单次返回） */
