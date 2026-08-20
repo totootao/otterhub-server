@@ -53,6 +53,15 @@ write_var KV_AUTH_TOKEN     "$KV_AUTH_TOKEN"
 write_var KV_BASE_PATH      "$KV_BASE_PATH"
 
 echo "[entrypoint] 已注入变量: $(cut -d= -f1 "$VARS_FILE" | paste -sd, -)"
+
+# 支持挂载自定义 CA（内网自签证书等）：
+#   -v ./my-ca.crt:/usr/local/share/ca-certificates/my-ca.crt:ro
+# 挂载后每次启动自动重建系统信任库
+if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then
+  echo "[entrypoint] 检测到自定义 CA，更新系统信任库"
+  update-ca-certificates >/dev/null 2>&1 || true
+fi
+
 echo "[entrypoint] 启动 wrangler pages dev (0.0.0.0:${PORT})，数据目录 /app/data"
 
 exec npx wrangler pages dev frontend/out \

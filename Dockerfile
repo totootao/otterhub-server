@@ -30,6 +30,14 @@ FROM node:22-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
+# 关键修复：官方 node:*-slim 镜像在构建后会 purge 掉 ca-certificates，
+# 而 workerd 的出站 TLS 校验依赖系统 CA 库，缺失将导致所有 HTTPS 请求
+# 报 "TLS peer's certificate is not trusted / unable to get local issuer certificate"
+# （Node.js 自带内置 CA 不受影响，但 wrangler/workerd 不是）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # 复制运行时必需产物（node_modules 含 wrangler/workerd 及 Functions 依赖）
 COPY --from=builder /app/package.json /app/package-lock.json ./
 COPY --from=builder /app/node_modules ./node_modules
