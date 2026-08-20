@@ -43,6 +43,9 @@ export type Env = {
    * Telegram API 代理（自部署场景，可选）：
    * TG_API_BASE 配置后所有 api.telegram.org 请求改走该基址，
    * 例如 CF Pages 上的 otterhub-tg-proxy：https://cf.totootao.top/tg
+   * 支持多代理轮转：逗号分隔多地址，或 JSON 数组
+   * （字符串数组共用 TG_PROXY_TOKEN；对象数组可按代理指定 token）。
+   * 连续失败 2 次的代理自动冷却 30s，请求在健康代理间轮转。
    * TG_PROXY_TOKEN 为代理鉴权令牌，以 x-proxy-token 头发送。
    */
   TG_API_BASE?: string;
