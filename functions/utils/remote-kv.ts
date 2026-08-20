@@ -235,7 +235,9 @@ export function resolveRemoteKV(env: any): RemoteKV | null {
   const token = env?.KV_AUTH_TOKEN;
   if (!endpoint || !token) return null;
 
-  let base = String(endpoint).replace(/\/+$/, "");
+  let base = String(endpoint).trim().replace(/\/+$/, "");
+  // 容错：漏写协议时默认 https://（"w.totootao.top/tekv" → "https://w.totootao.top/tekv"）
+  if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
   const basePath = env.KV_BASE_PATH
     ? String(env.KV_BASE_PATH).replace(/^\/+|\/+$/g, "")
     : "";

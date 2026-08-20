@@ -46,6 +46,7 @@ COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/wrangler.jsonc ./
 COPY --from=builder /app/frontend/out ./frontend/out
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY kv-precheck.mjs /app/kv-precheck.mjs
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
     && mkdir -p /app/data
 

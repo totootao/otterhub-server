@@ -62,6 +62,14 @@ if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then
   update-ca-certificates >/dev/null 2>&1 || true
 fi
 
+# ---------- 远程 KV 连通性自检 ----------
+# 用系统 CA 库（--use-openssl-ca）验证 TLS，与 workerd 出站校验行为一致；
+# 失败仅告警不阻断启动，并给出针对性修复提示。
+if [ -n "$KV_ENDPOINT" ]; then
+  KV_ENDPOINT="$KV_ENDPOINT" KV_AUTH_TOKEN="$KV_AUTH_TOKEN" \
+    node --use-openssl-ca /app/kv-precheck.mjs || true
+fi
+
 echo "[entrypoint] 启动 wrangler pages dev (0.0.0.0:${PORT})，数据目录 /app/data"
 
 exec npx wrangler pages dev frontend/out \
