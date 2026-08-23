@@ -54,6 +54,10 @@ function xhrPostForm<T>(
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url, true);
     xhr.withCredentials = true;
+    // 显式 10 分钟超时：覆盖服务端动态超时上限（240s）× 内部重试，
+    // 防止中间设备静默断连后前端长时间挂起、与服务端在途请求错位重试
+    xhr.timeout = 600_000;
+    xhr.ontimeout = () => reject(new Error("上传超时，请稍后重试"));
 
     xhr.upload.onprogress = (e) => {
       if (!onProgress) return;

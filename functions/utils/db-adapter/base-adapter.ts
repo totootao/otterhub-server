@@ -4,6 +4,30 @@ import { TRASH_EXPIRATION_TTL } from "@shared/types";
 import { extractKeyFromTrash, isUploadedChunk } from "./shared-utils";
 import { getUniqueFileId } from "../file";
 /**
+ * 在途分片登记（防重试风暴下的同片并发重发）。
+ *
+ * 背景：Telegram API 无幂等键，"已发出但结果未知"的请求无法安全重试。
+ * 客户端在中间设备断连后放弃但服务端仍在传时立即重试，会产生两个在途
+ * 请求同发一片 → Telegram 存两条消息，仅一条 file_id 被 KV 记录，
+ * 另一条成为永久占存储的孤立消息。
+ *
+ * 策略：同 key 同分片在 IN_FLIGHT_TTL 内已有在途请求时，新请求快速失败
+ * （HTTP 400 + CHUNK_IN_FLIGHT 标记），客户端多轮重试机制天然实现
+ * "稍后再试"；TTL 覆盖最大单次超时（240s）+ 重试退避缓冲。
+ *
+ * 注：workerd 多 isolate 下 globalThis 各自独立，该防护为尽力而为
+ * （单容器部署下高度有效），最终一致性仍由 KV uploadedIndices 幂等保证。
+ */
+const IN_FLIGHT_TTL_MS = 300_000;
+
+const globalForChunks = globalThis as unknown as {
+  __otterhubChunkInFlight?: Map<string, number>;
+};
+const chunkInFlight: Map<string, number> =
+  globalForChunks.__otterhubChunkInFlight ?? new Map();
+globalForChunks.__otterhubChunkInFlight = chunkInFlight;
+
+/**
  * 存储适配器基类
  * 提供通用的分片文件处理逻辑
  */
@@ -121,6 +145,36 @@ export abstract class BaseAdapter implements DBAdapter {
     chunkFile: File | Blob,
     waitUntil?: (promise: Promise<any>) => void
   ): Promise<{ chunkIndex: number }> {
+    // 0. 在途检查：同片请求仍在执行中（含服务端内部重试）时快速拒绝，
+    //    避免与在途请求并发重发造成 Telegram 重复存储
+    const inFlightKey = `${key}#${chunkIndex}`;
+    const inFlightSince = chunkInFlight.get(inFlightKey);
+    const now = Date.now();
+    if (
+      inFlightSince !== undefined &&
+      now - inFlightSince < IN_FLIGHT_TTL_MS
+    ) {
+      console.warn(
+        `[uploadChunk] Chunk ${chunkIndex} of ${key} still in flight ` +
+          `(${Math.round((now - inFlightSince) / 1000)}s ago), rejecting duplicate submit`
+      );
+      throw new Error("CHUNK_IN_FLIGHT: retry this chunk later");
+    }
+    chunkInFlight.set(inFlightKey, now);
+
+    try {
+      return await this.doUploadChunk(key, chunkIndex, chunkFile, waitUntil);
+    } finally {
+      chunkInFlight.delete(inFlightKey);
+    }
+  }
+
+  private async doUploadChunk(
+    key: string,
+    chunkIndex: number,
+    chunkFile: File | Blob,
+    waitUntil?: (promise: Promise<any>) => void
+  ): Promise<{ chunkIndex: number }> {
     // 1. 获取当前 metadata
     const item = await this.getFileMetadataWithValue(key);
     if (!item) {
@@ -159,14 +213,32 @@ export abstract class BaseAdapter implements DBAdapter {
     console.log(`[uploadChunk] Uploaded chunk ${chunkIndex}: ${chunkId}`);
 
     // 4. 更新 KV metadata（记录分片 ID 与进度）
-    await this.updateChunkInfo(
-      key,
-      chunkIndex,
-      chunkId,
-      chunkFile.size,
-      thumbUrl,
-      chunkSlot
-    );
+    // TG 已存成功但 KV 元数据写入失败时，客户端重试会重发该片产生孤立消息。
+    // 记录完整救援信息（chunkId 可手工补回 KV value 的 chunks 数组），并在
+    // 返回给客户端的错误中带上明确标记——客户端按失败处理，但 KV 恢复后
+    // 断点续传入口的幂等检查会自动跳过该片，不会重复存储。
+    try {
+      await this.updateChunkInfo(
+        key,
+        chunkIndex,
+        chunkId,
+        chunkFile.size,
+        thumbUrl,
+        chunkSlot
+      );
+    } catch (err) {
+      console.error(
+        `[uploadChunk] Chunk ${chunkIndex} stored in TG as ${chunkId} ` +
+          `but KV metadata write failed. Manual recovery: append ` +
+          `{"idx":${chunkIndex},"file_id":"${chunkId}","size":${chunkFile.size}` +
+          `${chunkSlot !== undefined ? `,"slot":${chunkSlot}` : ""}} to chunks array of ${key}`,
+        err
+      );
+      throw new Error(
+        `CHUNK_STORED_BUT_INDEX_FAILED: chunk ${chunkIndex} saved in Telegram ` +
+          `but index write failed, do not blindly retry (orphan risk)`
+      );
+    }
 
     return { chunkIndex };
   }

@@ -652,10 +652,40 @@ export class TGAdapter extends BaseAdapter {
    *   所有槽位都限流后再退避重试（尊重 retry_after）
    * - 其他失败：指数退避 + 轮转到下一槽位重试
    * - sendPhoto 失败降级为 sendDocument 的逻辑保持不变
-   * - 单次请求 60s 超时
+   * - 超时按请求体大小动态计算（防假超时重复上传，见 estimateUploadTimeoutMs）
    *
    * @returns 成功时携带实际使用的 slotIndex（写入 metadata.tgSlot / chunk.slot）
    */
+
+  /**
+   * 按请求体大小估算单次尝试超时。
+   *
+   * 背景：固定 60s 超时在慢链路（如经 CF 代理 0.3~0.5MB/s）下传 20MB 分片
+   * 需要 40~66s+，会被提前 abort 并重发——而 Telegram 可能已收到并保存了
+   * 上一条消息，重发即产生"孤立消息"（file_id 未被记录，永久占存储）。
+   *
+   * 策略：基础 60s + 按 256KB/s 保守速率预留传输时间，上限 240s
+   * （低于浏览器/网关常见 300s 空闲断连阈值，确保服务端先于客户端出结果）。
+   * 20MB → 60 + 80 = 140s；10MB → 100s；小文件仍为 60s。
+   */
+  private estimateUploadTimeoutMs(formData: FormData): number {
+    let bodyBytes = 0;
+    try {
+      // workerd 的 FormData 类型未暴露 entries()，用 forEach 遍历（value: string | File）
+      formData.forEach((v) => {
+        if (typeof v === "string") {
+          bodyBytes += v.length;
+        } else if (v && typeof v.size === "number") {
+          bodyBytes += v.size;
+        }
+      });
+    } catch {
+      /* 估算失败走基础超时 */
+    }
+    const transferMs = Math.round((bodyBytes / (256 * 1024)) * 1000);
+    return Math.min(240_000, 60_000 + transferMs);
+  }
+
   private async sendToTelegram(
     formData: FormData,
     apiEndpoint: string,
@@ -678,8 +708,9 @@ export class TGAdapter extends BaseAdapter {
     // chat_id 必须与 bot 槽位匹配（每个 bot 只能向自己所在的 chat 发送）
     formData.set("chat_id", slot.chatId);
 
+    const timeoutMs = this.estimateUploadTimeoutMs(formData);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await tgFetch(apiUrl, {
@@ -771,8 +802,10 @@ export class TGAdapter extends BaseAdapter {
       clearTimeout(timeoutId);
       if (retryCount > 0) {
         const isAbort = error?.name === "AbortError";
+        // abort 大概率是链路慢而非 Telegram 故障：超时本身已等待很久，
+        // 退避加长给拥塞窗口恢复时间，降低"假死重发"概率
         const backoffMs = isAbort
-          ? 2000
+          ? 5000
           : Math.min(30000, Math.pow(2, 3 - retryCount) * 1000);
         await sleep(backoffMs);
         return this.sendToTelegram(
