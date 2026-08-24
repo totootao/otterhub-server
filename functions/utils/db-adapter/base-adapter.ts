@@ -28,6 +28,47 @@ const chunkInFlight: Map<string, number> =
 globalForChunks.__otterhubChunkInFlight = chunkInFlight;
 
 /**
+ * 每文件 KV 元数据写互斥（同 isolate 内串行化"读-改-写"循环）。
+ *
+ * 背景：updateChunkInfo 是 "GET metadata → 内存修改 → PUT 整体覆盖" 的
+ * 非原子序列，而 KV（Cloudflare KV 与自建 kv_server.py 均如此）没有
+ * 条件写 / CAS 能力。MAX_CONCURRENTS=3 时多个分片同时完成 TG 上传后
+ * 并发进入该函数，全部读到同一份旧状态再各自整体覆盖写回，
+ * 后写者直接抹掉先写者记录的分片 —— uploadedIndices 与 chunks 数组
+ * 双双丢数据。客户端随后按 progress 轮询补传"缺失"分片，
+ * 已在 Telegram 落盘的分片被重复上传（孤立消息，永久占存储）。
+ *
+ * 方案：同一 key 的元数据更新经 promise 链串行执行，后到者必然
+ * 基于前一次写回后的最新状态做增量修改，丢失更新不再发生。
+ * 注：与 chunkInFlight 同理，workerd 多 isolate 下各 isolate 持有
+ * 独立 Map，属尽力而为；单容器自部署（wrangler pages dev 单进程）
+ * 完全有效，跨 isolate 兜底由幂等检查 + 重试机制承担。
+ */
+const globalForMetaLock = globalThis as unknown as {
+  __otterhubMetaLocks?: Map<string, Promise<unknown>>;
+};
+const metaLocks: Map<
+  string,
+  Promise<unknown>
+> = globalForMetaLock.__otterhubMetaLocks ?? new Map();
+globalForMetaLock.__otterhubMetaLocks = metaLocks;
+
+/** 同 key 元数据更新串行化：无论前序任务成败，后续任务都照常执行 */
+async function withMetaLock<T>(
+  key: string,
+  task: () => Promise<T>
+): Promise<T> {
+  const prev = metaLocks.get(key) ?? Promise.resolve();
+  const run = prev.then(task, task);
+  metaLocks.set(key, run);
+  const settle = () => {
+    if (metaLocks.get(key) === run) metaLocks.delete(key);
+  };
+  run.then(settle, settle);
+  return run;
+}
+
+/**
  * 存储适配器基类
  * 提供通用的分片文件处理逻辑
  */
@@ -150,10 +191,7 @@ export abstract class BaseAdapter implements DBAdapter {
     const inFlightKey = `${key}#${chunkIndex}`;
     const inFlightSince = chunkInFlight.get(inFlightKey);
     const now = Date.now();
-    if (
-      inFlightSince !== undefined &&
-      now - inFlightSince < IN_FLIGHT_TTL_MS
-    ) {
+    if (inFlightSince !== undefined && now - inFlightSince < IN_FLIGHT_TTL_MS) {
       console.warn(
         `[uploadChunk] Chunk ${chunkIndex} of ${key} still in flight ` +
           `(${Math.round((now - inFlightSince) / 1000)}s ago), rejecting duplicate submit`
@@ -286,7 +324,11 @@ export abstract class BaseAdapter implements DBAdapter {
   }
 
   /**
-   * 更新分片信息（使用重试机制避免并发冲突）
+   * 更新分片信息（per-key 互斥 + 重试机制）
+   *
+   * 互斥锁保证同一文件的多个分片并发完成时，"读-改-写"严格串行，
+   * 杜绝后写覆盖先写导致的 uploadedIndices / chunks 丢失；
+   * 重试机制继续兜底 KV 瞬时故障（网络抖动等）。
    */
   protected async updateChunkInfo(
     key: string,
@@ -296,70 +338,74 @@ export abstract class BaseAdapter implements DBAdapter {
     thumbUrl?: string,
     chunkSlot?: number
   ): Promise<void> {
-    const kv = this.env[this.kvName];
-    const maxRetries = 3;
+    return withMetaLock(key, async () => {
+      const kv = this.env[this.kvName];
+      const maxRetries = 3;
 
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        // 1. 获取最新状态
-        const item = await this.getFileMetadataWithValue(key);
-        if (!item) {
-          throw new Error(`[updateChunkInfo] File not found: ${key}`);
-        }
+      for (let i = 0; i < maxRetries; i++) {
+        try {
+          // 1. 获取最新状态（互斥锁保证此处读到的是前序写入后的最新值）
+          const item = await this.getFileMetadataWithValue(key);
+          if (!item) {
+            throw new Error(`[updateChunkInfo] File not found: ${key}`);
+          }
 
-        const { metadata, value } = item;
-        if (!metadata?.chunkInfo) {
-          throw new Error(
-            `[updateChunkInfo] No metadata/chunkInfo for key: ${key}`
-          );
-        }
+          const { metadata, value } = item;
+          if (!metadata?.chunkInfo) {
+            throw new Error(
+              `[updateChunkInfo] No metadata/chunkInfo for key: ${key}`
+            );
+          }
 
-        const chunks: Chunk[] = value ? JSON.parse(value) : [];
+          const chunks: Chunk[] = value ? JSON.parse(value) : [];
 
-        // 2. 检查是否已上传
-        if (metadata.chunkInfo.uploadedIndices?.includes(chunkIndex)) {
+          // 2. 检查是否已上传（幂等：TG 上传与 KV 写入之间其他请求
+          //    已记录该分片时直接跳过，防止 chunks 数组重复入列）
+          if (metadata.chunkInfo.uploadedIndices?.includes(chunkIndex)) {
+            console.log(
+              `[updateChunkInfo] Chunk ${chunkIndex} already uploaded, skipping`
+            );
+            return;
+          }
+
+          // 3. 更新 uploadedIndices
+          if (!metadata.chunkInfo.uploadedIndices) {
+            metadata.chunkInfo.uploadedIndices = [];
+          }
+          metadata.chunkInfo.uploadedIndices.push(chunkIndex);
+
+          // 4. 更新 chunks 数组（存储在 value 中；步骤 2 的幂等检查
+          //    已保证同分片不会重复入列）
+          chunks.push({
+            idx: chunkIndex,
+            file_id: chunkId,
+            size: chunkSize,
+            slot: chunkSlot, // TG 多 Bot 池槽位（file_id 与 bot 绑定，下载须用对应 bot）
+          });
+
+          // 如果有缩略图且元数据中没有，则更新
+          if (thumbUrl && !metadata.thumbUrl) {
+            metadata.thumbUrl = thumbUrl;
+          }
+
+          // 5. 写回 KV
+          await kv.put(key, JSON.stringify(chunks), { metadata });
+
           console.log(
-            `[updateChunkInfo] Chunk ${chunkIndex} already uploaded, skipping`
+            `[updateChunkInfo] Updated chunk ${chunkIndex} (attempt ${i + 1})`
           );
           return;
+        } catch (error) {
+          console.error(`[updateChunkInfo] Attempt ${i + 1} failed:`, error);
+          if (i === maxRetries - 1) {
+            throw error;
+          }
+          // 指数退避
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.pow(2, i) * 100)
+          );
         }
-
-        // 3. 更新 uploadedIndices
-        if (!metadata.chunkInfo.uploadedIndices) {
-          metadata.chunkInfo.uploadedIndices = [];
-        }
-        metadata.chunkInfo.uploadedIndices.push(chunkIndex);
-
-        // 4. 更新 chunks 数组（存储在 value 中）
-        chunks.push({
-          idx: chunkIndex,
-          file_id: chunkId,
-          size: chunkSize,
-          slot: chunkSlot, // TG 多 Bot 池槽位（file_id 与 bot 绑定，下载须用对应 bot）
-        });
-
-        // 如果有缩略图且元数据中没有，则更新
-        if (thumbUrl && !metadata.thumbUrl) {
-          metadata.thumbUrl = thumbUrl;
-        }
-
-        // 5. 写回 KV
-        await kv.put(key, JSON.stringify(chunks), { metadata });
-
-        console.log(
-          `[updateChunkInfo] Updated chunk ${chunkIndex} (attempt ${i + 1})`
-        );
-        return;
-      } catch (error) {
-        console.error(`[updateChunkInfo] Attempt ${i + 1} failed:`, error);
-        if (i === maxRetries - 1) {
-          throw error;
-        }
-        // 指数退避
-        await new Promise((resolve) =>
-          setTimeout(resolve, Math.pow(2, i) * 100)
-        );
       }
-    }
+    });
   }
 }
